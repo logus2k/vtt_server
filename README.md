@@ -238,7 +238,7 @@ Typical inference latency on RTX 4090:
 
 ## License
 
-MIT License
+Apache 2.0 License
 
 ## Acknowledgments
 
