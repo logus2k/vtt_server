@@ -1,0 +1,37 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8200
+  },
+  "models": [
+    {
+      "name": "cosmos",
+      "active": true,
+      "path": "./models/cosmos_reason2",
+      "max_new_tokens": 512,
+      "dtype": "float16",
+      "attn_implementation": "sdpa",
+      "memory": {
+        "enabled": true,
+        "max_context_tokens": 1024
+      }
+    },
+    {
+      "name": "smolvlm2",
+      "active": false,
+      "path": "./models/smolvlm2",
+      "max_new_tokens": 256,
+      "dtype": "bfloat16",
+      "attn_implementation": "flash_attention_2",
+      "memory": {
+        "enabled": true,
+        "max_context_tokens": 2048
+      }
+    }
+  ],
+  "inference": {
+    "buffer_size": 1,
+    "fps": 4,
+    "default_prompt": "What do you see?"
+  }
+}
