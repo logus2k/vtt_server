@@ -6,7 +6,7 @@
   "models": [
     {
       "name": "cosmos",
-      "active": true,
+      "active": false,
       "path": "./models/cosmos_reason2",
       "max_new_tokens": 512,
       "dtype": "float16",
@@ -18,7 +18,7 @@
     },
     {
       "name": "smolvlm2",
-      "active": false,
+      "active": true,
       "path": "./models/smolvlm2",
       "max_new_tokens": 256,
       "dtype": "bfloat16",
@@ -31,7 +31,7 @@
   ],
   "inference": {
     "buffer_size": 1,
-    "fps": 4,
+    "fps": 1,
     "default_prompt": "What do you see?"
   }
 }

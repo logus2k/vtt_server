@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>VTT Client (Proxy)</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        #status { padding: 10px; margin-bottom: 10px; }
+        #status.connected { background: #d4edda; }
+        #status.disconnected { background: #f8d7da; }
+        video { width: 640px; height: 480px; background: #000; }
+        #output { white-space: pre-wrap; background: #f5f5f5; padding: 10px; min-height: 100px; margin-top: 10px; }
+        button { padding: 10px 20px; font-size: 16px; margin: 10px 5px 10px 0; }
+        button:disabled { opacity: 0.5; }
+        .running { background: #28a745; color: white; }
+        input[type="text"] { padding: 10px; font-size: 14px; width: 300px; }
+        label { display: block; margin-top: 10px; }
+        .section { margin-top: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .section h3 { margin-top: 0; }
+        #chatOutput { white-space: pre-wrap; background: #e8f4f8; padding: 10px; min-height: 60px; margin-top: 10px; }
+        #chatInput { width: 400px; }
+        #modelInfo { font-size: 14px; color: #666; margin-left: 10px; }
+        #memoryIndicator { font-size: 12px; padding: 2px 8px; border-radius: 4px; margin-left: 10px; }
+        #memoryIndicator.enabled { background: #d4edda; color: #155724; }
+        #memoryIndicator.disabled { background: #f8d7da; color: #721c24; }
+        .clear-btn { background: #dc3545; color: white; font-size: 14px; padding: 5px 10px; }
+    </style>
+</head>
+<body>
+    <h1>VTT Client (Proxy) <span id="modelInfo"></span><span id="memoryIndicator"></span></h1>
+    <div id="status" class="disconnected">Disconnected</div>
+    
+    <video id="video" autoplay playsinline></video>
+    <br>
+    
+    <div class="section">
+        <h3>Continuous Video Inference</h3>
+        <label>Prompt:</label>
+        <input type="text" id="prompt" value="What do you see?">
+        <br>
+        <button id="startCameraBtn">Start Camera</button>
+        <button id="startInferenceBtn" disabled>Start Inference</button>
+        <button id="stopInferenceBtn" disabled>Stop Inference</button>
+        <button id="stopCameraBtn" disabled>Stop Camera</button>
+        <div id="output">Output will appear here...</div>
+        <div id="stats">Frames sent: 0 | Inference: Off</div>
+    </div>
+    
+    <div class="section">
+        <h3>Chat</h3>
+        <label>Message:</label>
+        <input type="text" id="chatInput" placeholder="Ask a question...">
+        <input type="file" id="chatImage" accept="image/*" style="margin-left: 10px;">
+        <br>
+        <button id="sendChatBtn">Send</button>
+        <button id="sendWithFrameBtn" disabled>Send with Current Frame</button>
+        <button id="clearMemoryBtn" class="clear-btn">Clear Memory</button>
+        <div id="chatOutput">Chat response will appear here...</div>
+    </div>
+
+    <script>
+        // Proxy configuration - same pattern as STT/TTS in main.js
+        const VTT_URL = 'https://logus2k.com/vtt';
+        const VTT_PATH = '/vtt/socket.io';
+        const TARGET_FPS = 2;
+        const CAMERA_NAME = 'front';
+
+        let socket;
+        let video = document.getElementById('video');
+        let stream = null;
+        let captureInterval = null;
+        let frameCount = 0;
+        let inferenceRunning = false;
+        let lastFrame = null;
+        let memoryEnabled = false;
+
+        // Connect to server (extract origin from URL, same as STT/TTS)
+        const vttOrigin = new URL(VTT_URL, window.location.origin).origin;
+        console.log(`Connecting to VTT at ${vttOrigin} with path ${VTT_PATH}`);
+        
+        socket = io(vttOrigin, {
+            path: VTT_PATH,
+            transports: ['websocket', 'polling'],
+            forceNew: true
+        });
+
+        socket.on('connect', () => {
+            console.log('VTT connected');
+            document.getElementById('status').textContent = 'Connected';
+            document.getElementById('status').className = 'connected';
+        });
+
+        socket.on('connect_error', (err) => {
+            console.error('VTT connection error:', err.message);
+            document.getElementById('status').textContent = `Connection error: ${err.message}`;
+        });
+
+        socket.on('disconnect', () => {
+            console.log('VTT disconnected');
+            document.getElementById('status').textContent = 'Disconnected';
+            document.getElementById('status').className = 'disconnected';
+            document.getElementById('modelInfo').textContent = '';
+            document.getElementById('memoryIndicator').textContent = '';
+            document.getElementById('memoryIndicator').className = '';
+        });
+
+        socket.on('status', (data) => {
+            console.log('VTT status:', data);
+            inferenceRunning = data[CAMERA_NAME];
+            memoryEnabled = data.memory || false;
+            updateInferenceUI();
+            if (data.model) {
+                document.getElementById('modelInfo').textContent = `[${data.model}]`;
+            }
+            const memInd = document.getElementById('memoryIndicator');
+            memInd.textContent = memoryEnabled ? 'Memory ON' : 'Memory OFF';
+            memInd.className = memoryEnabled ? 'enabled' : 'disabled';
+        });
+
+        socket.on('inference_started', (data) => {
+            console.log('Inference started:', data);
+            if (data.camera === CAMERA_NAME) {
+                inferenceRunning = true;
+                updateInferenceUI();
+                document.getElementById('output').textContent = `Inference started: ${data.prompt}`;
+            }
+        });
+
+        socket.on('inference_stopped', (data) => {
+            console.log('Inference stopped:', data);
+            if (data.camera === CAMERA_NAME) {
+                inferenceRunning = false;
+                updateInferenceUI();
+                document.getElementById('output').textContent = 'Inference stopped';
+            }
+        });
+
+        socket.on('description', (data) => {
+            console.log('Description received:', data);
+            if (data.camera === CAMERA_NAME) {
+                document.getElementById('output').textContent = 
+                    `${data.text}\n\n` +
+                    `[Latency: ${data.latency_ms}ms | Frames: ${data.frame_count}]`;
+            }
+        });
+
+        socket.on('chat_response', (data) => {
+            console.log('Chat response:', data);
+            document.getElementById('chatOutput').textContent = 
+                `${data.text}\n\n[Latency: ${data.latency_ms}ms]`;
+        });
+
+        socket.on('memory_cleared', () => {
+            console.log('Memory cleared');
+            document.getElementById('chatOutput').textContent = '[Memory cleared]';
+        });
+
+        socket.on('error', (data) => {
+            console.error('VTT error:', data);
+            document.getElementById('output').textContent = `[ERROR] ${data.message}`;
+            document.getElementById('chatOutput').textContent = `[ERROR] ${data.message}`;
+        });
+
+        function updateInferenceUI() {
+            document.getElementById('startInferenceBtn').disabled = inferenceRunning || !stream;
+            document.getElementById('stopInferenceBtn').disabled = !inferenceRunning;
+            document.getElementById('startInferenceBtn').className = '';
+            document.getElementById('stopInferenceBtn').className = inferenceRunning ? 'running' : '';
+            document.getElementById('sendWithFrameBtn').disabled = !stream;
+            document.getElementById('stats').textContent = 
+                `Frames sent: ${frameCount} | Inference: ${inferenceRunning ? 'On' : 'Off'}`;
+        }
+
+        // Start camera
+        document.getElementById('startCameraBtn').addEventListener('click', async () => {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+                
+                document.getElementById('startCameraBtn').disabled = true;
+                document.getElementById('stopCameraBtn').disabled = false;
+                document.getElementById('startInferenceBtn').disabled = inferenceRunning;
+                document.getElementById('sendWithFrameBtn').disabled = false;
+
+                // Start capturing frames
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                
+                captureInterval = setInterval(() => {
+                    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                        canvas.width = video.videoWidth;
+                        canvas.height = video.videoHeight;
+                        ctx.drawImage(video, 0, 0);
+                        
+                        canvas.toBlob((blob) => {
+                            blob.arrayBuffer().then((buffer) => {
+                                lastFrame = new Uint8Array(buffer);
+                                socket.emit('frame', {
+                                    camera: CAMERA_NAME,
+                                    image: lastFrame
+                                });
+                                frameCount++;
+                                updateInferenceUI();
+                            });
+                        }, 'image/jpeg', 0.8);
+                    }
+                }, 1000 / TARGET_FPS);
+
+            } catch (err) {
+                alert('Cannot access camera: ' + err.message);
+            }
+        });
+
+        // Start inference
+        document.getElementById('startInferenceBtn').addEventListener('click', () => {
+            const prompt = document.getElementById('prompt').value || 'What do you see?';
+            socket.emit('start_inference', { camera: CAMERA_NAME, prompt: prompt });
+        });
+
+        // Stop inference
+        document.getElementById('stopInferenceBtn').addEventListener('click', () => {
+            socket.emit('stop_inference', { camera: CAMERA_NAME });
+        });
+
+        // Stop camera
+        document.getElementById('stopCameraBtn').addEventListener('click', () => {
+            if (inferenceRunning) {
+                socket.emit('stop_inference', { camera: CAMERA_NAME });
+            }
+            
+            if (captureInterval) clearInterval(captureInterval);
+            if (stream) stream.getTracks().forEach(track => track.stop());
+            video.srcObject = null;
+            stream = null;
+            lastFrame = null;
+            
+            document.getElementById('startCameraBtn').disabled = false;
+            document.getElementById('stopCameraBtn').disabled = true;
+            document.getElementById('startInferenceBtn').disabled = true;
+            document.getElementById('stopInferenceBtn').disabled = true;
+            document.getElementById('sendWithFrameBtn').disabled = true;
+        });
+
+        // Send chat message
+        document.getElementById('sendChatBtn').addEventListener('click', () => {
+            const message = document.getElementById('chatInput').value;
+            const imageFile = document.getElementById('chatImage').files[0];
+            
+            if (!message) {
+                alert('Please enter a message');
+                return;
+            }
+            
+            document.getElementById('chatOutput').textContent = 'Processing...';
+            
+            if (imageFile) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    socket.emit('chat', {
+                        message: message,
+                        image: new Uint8Array(e.target.result)
+                    });
+                };
+                reader.readAsArrayBuffer(imageFile);
+            } else {
+                socket.emit('chat', { message: message });
+            }
+        });
+
+        // Send chat with current camera frame
+        document.getElementById('sendWithFrameBtn').addEventListener('click', () => {
+            const message = document.getElementById('chatInput').value;
+            
+            if (!message) {
+                alert('Please enter a message');
+                return;
+            }
+            
+            if (!lastFrame) {
+                alert('No frame available');
+                return;
+            }
+            
+            document.getElementById('chatOutput').textContent = 'Processing...';
+            socket.emit('chat', {
+                message: message,
+                image: lastFrame
+            });
+        });
+
+        // Clear memory
+        document.getElementById('clearMemoryBtn').addEventListener('click', () => {
+            socket.emit('clear_memory', {});
+        });
+
+        // Enter key to send chat
+        document.getElementById('chatInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                document.getElementById('sendChatBtn').click();
+            }
+        });
+    </script>
+</body>
+</html>

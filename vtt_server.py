@@ -70,17 +70,17 @@ class VTTServer:
         buffer_size = CONFIG["inference"]["buffer_size"]
         self.buffers = {
             "front": FrameBuffer(buffer_size),
-            "back": FrameBuffer(buffer_size)
+            "rear": FrameBuffer(buffer_size)
         }
-        
+
         # Continuous inference state
         self.inference_tasks: dict[str, asyncio.Task | None] = {
             "front": None,
-            "back": None
+            "rear": None
         }
         self.inference_prompts = {
             "front": CONFIG["inference"]["default_prompt"],
-            "back": CONFIG["inference"]["default_prompt"]
+            "rear": CONFIG["inference"]["default_prompt"]
         }
         
         # Model (loaded on startup)
@@ -100,7 +100,7 @@ class VTTServer:
             memory_enabled = self.memory.config.enabled if self.memory else False
             await self.sio.emit("status", {
                 "front": self.inference_tasks["front"] is not None,
-                "back": self.inference_tasks["back"] is not None,
+                "rear": self.inference_tasks["rear"] is not None,
                 "model": self.model_config.get("name") if self.model_config else None,
                 "memory": memory_enabled
             }, to=sid)
@@ -116,7 +116,7 @@ class VTTServer:
         async def frame(sid, data):
             """
             Receive binary frame.
-            Expected format: {camera: "front"|"back", image: <binary JPEG>}
+            Expected format: {camera: "front"|"rear", image: <binary JPEG>}
             """
             camera = data.get("camera")
             image_bytes = data.get("image")
@@ -135,7 +135,7 @@ class VTTServer:
         async def start_inference(sid, data):
             """
             Start continuous inference loop.
-            Expected format: {camera: "front"|"back", prompt?: string}
+            Expected format: {camera: "front"|"rear", prompt?: string}
             """
             camera = data.get("camera")
             prompt = data.get("prompt", CONFIG["inference"]["default_prompt"])
@@ -166,7 +166,7 @@ class VTTServer:
         async def stop_inference(sid, data):
             """
             Stop continuous inference loop.
-            Expected format: {camera: "front"|"back"}
+            Expected format: {camera: "front"|"rear"}
             """
             camera = data.get("camera")
             
